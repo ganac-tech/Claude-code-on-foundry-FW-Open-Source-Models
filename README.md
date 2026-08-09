@@ -117,7 +117,7 @@ Or launch a full interactive Claude Code session:
 
 ### Watching the prompt cache
 
-`demo_cache.sh` shows what every turn cost in tokens, including how much came
+`demo_cache_direct.sh` shows what every turn cost in tokens, including how much came
 out of the prompt cache:
 
 ```
@@ -142,7 +142,7 @@ served entirely from cache.
 
 | | traffic path | where the cached number comes from |
 |---|---|---|
-| `demo_cache.sh` | direct to Foundry | the response itself |
+| `demo_cache_direct.sh` | direct to Foundry | the response itself |
 | `demo_cache_gateway.sh` | **through the gateway** | a one-token probe |
 
 `demo_cache_gateway.sh` is the realistic one: your prompt takes the same path
@@ -253,7 +253,7 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 | `aigw-foundry.yaml` | Gateway config |
 | `start-gateway.sh` | Loads `.env`, runs the gateway |
 | `demo.sh` | Interactive prompt |
-| `demo_cache.sh` | Per-turn cached / input / output tokens, direct to Foundry |
+| `demo_cache_direct.sh` | Per-turn cached / input / output tokens, direct to Foundry |
 | `demo_cache_gateway.sh` | Same numbers, but the traffic goes through the gateway |
 | `claude-foundry.sh` | Full Claude Code session |
 | `smoke-test.sh` | 11 checks against a running gateway |

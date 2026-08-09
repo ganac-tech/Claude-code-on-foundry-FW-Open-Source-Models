@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prompt-cache demo — shows input / cached / output tokens for every turn.
 #
-#   ./demo_cache.sh
+#   ./demo_cache_direct.sh
 #
 # At the prompt:
 #   /again    re-send the last prompt (the clearest way to see a cache hit)

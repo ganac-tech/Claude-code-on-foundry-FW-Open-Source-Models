@@ -23,7 +23,7 @@
 #   your prompt              ──▶ gateway ──▶ Foundry ──▶ GLM 5.2   (the real turn)
 #
 # input and output tokens come from the gateway's own response; only the cached
-# figure comes from the probe. ./demo_cache.sh is the direct-only version.
+# figure comes from the probe. ./demo_cache_direct.sh is the direct-only version.
 #
 # ── session affinity ────────────────────────────────────────────────────────
 # The gateway pins `prompt_cache_key` to CACHE_KEY from .env, via bodyMutation
