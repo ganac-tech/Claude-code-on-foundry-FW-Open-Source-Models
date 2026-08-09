@@ -134,11 +134,27 @@ you> /again
 prompt starts cold again, and `/stats` totals the session with what the cache
 saved.
 
-It talks to Foundry's OpenAI endpoint directly rather than through the gateway —
-not a design preference, a limitation. Envoy AI Gateway v1.0.0 does not carry the
-upstream `usage.prompt_tokens_details.cached_tokens` field into the Anthropic
-response, so every request comes back reporting zero cache reads even when
-Foundry served it entirely from cache.
+There are two versions, because the gateway cannot report cache reads. Envoy AI
+Gateway v1.0.0 does not carry the upstream
+`usage.prompt_tokens_details.cached_tokens` field into the Anthropic response,
+so asking it how much was cached always returns zero — even on a request GLM
+served entirely from cache.
+
+| | traffic path | where the cached number comes from |
+|---|---|---|
+| `demo_cache.sh` | direct to Foundry | the response itself |
+| `demo_cache_gateway.sh` | **through the gateway** | a one-token probe |
+
+`demo_cache_gateway.sh` is the realistic one: your prompt takes the same path
+Claude Code takes, and GLM does the caching. Before each turn it sends a
+one-token probe straight to Foundry with the same prefix and the same
+`prompt_cache_key` the gateway injects, and reads the cache meter off that.
+Input and output tokens still come from the gateway's own response.
+
+Caching is keyed on `CACHE_KEY` from `.env`, which the gateway stamps onto every
+request. It is deliberately one key for the whole fleet: every Claude Code user
+sends the same large system prompt, so a shared key lets them all reuse one
+cached copy of it. A key per user would split it up and cost more.
 
 ---
 
@@ -237,7 +253,8 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 | `aigw-foundry.yaml` | Gateway config |
 | `start-gateway.sh` | Loads `.env`, runs the gateway |
 | `demo.sh` | Interactive prompt |
-| `demo_cache.sh` | Same, plus per-turn cached / input / output tokens |
+| `demo_cache.sh` | Per-turn cached / input / output tokens, direct to Foundry |
+| `demo_cache_gateway.sh` | Same numbers, but the traffic goes through the gateway |
 | `claude-foundry.sh` | Full Claude Code session |
 | `smoke-test.sh` | 11 checks against a running gateway |
 | `architecture/` | Diagram and how the pieces fit — see `architecture/README.md` |
