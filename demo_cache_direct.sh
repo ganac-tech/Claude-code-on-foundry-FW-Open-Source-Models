@@ -6,7 +6,7 @@
 # At the prompt:
 #   /again    re-send the last prompt (the clearest way to see a cache hit)
 #   /new      clear the conversation, keep the cache key
-#   /newkey   rotate the cache key — same prompt, new partition, cache MISS
+#   /newkey   rotate the cache key — usually turns the next hit into a miss
 #   /stats    session totals and what the cache saved
 #   exit      quit
 #
@@ -21,9 +21,15 @@
 # model, same .env — only the path differs. ./demo.sh is the gateway demo.
 #
 # ── session affinity ────────────────────────────────────────────────────────
-# Every request carries a `prompt_cache_key`, generated once per session. The
-# key partitions the cache: the same key reuses the same cached prefix, a
-# different key starts cold. That is what /newkey demonstrates.
+# Every request carries a `prompt_cache_key`, generated once per session.
+#
+# The key is a ROUTING hint, not a hard cache partition. Same key means your
+# requests keep landing where your prefix is already cached, which is why a
+# repeat is reliably a hit. A different key means you may land elsewhere — a
+# miss only if that replica has not seen the content. Measured on this
+# deployment: with a never-before-sent prefix, a new key misses every time
+# (0%); with a prefix that has been in heavy use, a new key still hit 100%,
+# because enough replicas already had it.
 set -uo pipefail
 
 cd "$(dirname "$0")"
@@ -221,7 +227,8 @@ while true; do
       CACHE_KEY_SESSION="$(new_key)"
       echo '[]' > "$HISTORY"
       dim "   new cache key: ${CACHE_KEY_SESSION}"
-      dim "   different partition — the same prompt will now MISS"
+      dim "   new key — the same prompt will usually miss now, though a"
+      dim "   heavily-used prefix may still be cached wherever you land"
       continue ;;
     /again)
       [[ -z $LAST ]] && { dim "   nothing sent yet"; continue; }

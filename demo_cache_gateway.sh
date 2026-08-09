@@ -32,8 +32,12 @@
 # one cached copy. A per-user key would split it and cost more.
 #
 # It also means a client cannot choose its own key here — the gateway overwrites
-# whatever arrives. To move to a different partition, change CACHE_KEY in .env
-# and restart the gateway. `/key` shows the one in force.
+# whatever arrives. To route on a different key, change CACHE_KEY in .env and
+# restart the gateway. `/key` shows the one in force.
+#
+# Note the key is a routing hint, not a hard partition: changing it does not
+# reliably produce a cold start. A prefix already cached on many replicas can
+# still hit under a brand-new key.
 set -uo pipefail
 
 cd "$(dirname "$0")"
@@ -243,7 +247,7 @@ while true; do
     /key)
       dim "   ${CACHE_KEY}"
       dim "   Set by bodyMutation in aigw-foundry.yaml, from CACHE_KEY in .env."
-      dim "   To use a different partition: change it there and restart the gateway."
+      dim "   To route on a different key: change it there and restart the gateway."
       continue ;;
     /new)
       echo '[]' > "$HISTORY"
