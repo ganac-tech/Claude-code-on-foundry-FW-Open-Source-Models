@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Prompt-cache demo, with the traffic going THROUGH the gateway.
 #
-#   ./start-gateway.sh          # terminal 1
-#   ./demo_cache_gateway.sh     # terminal 2
+#   ./demo_cache_gateway.sh     # that is all — it runs the gateway for you
+#
+# You pick a cache key (k1, k2, k3) at the start. The script starts the gateway
+# with that key, and restarts it when you switch with /key.
 #
 # Every prompt is sent to the gateway as an Anthropic request, translated to
 # OpenAI, and answered by GLM 5.2 in Foundry. The caching happens in the model.
@@ -31,9 +33,11 @@
 # user sends the same large system prompt, so one shared key lets them all reuse
 # one cached copy. A per-user key would split it and cost more.
 #
-# It also means a client cannot choose its own key here — the gateway overwrites
-# whatever arrives. To route on a different key, change CACHE_KEY in .env and
-# restart the gateway. `/key` shows the one in force.
+# A client genuinely cannot choose its own key on this path. `prompt_cache_key`
+# is not a field in the Anthropic Messages API, so a client that sends one has
+# it dropped in translation — measured twice on a fresh prefix: the gateway's
+# request never warmed the key the client asked for. The key has to come from
+# the gateway's own config, which is why switching keys restarts it.
 #
 # Note the key is a routing hint, not a hard partition: changing it does not
 # reliably produce a cold start. A prefix already cached on many replicas can
@@ -56,13 +60,11 @@ GW="${GW:-http://localhost:1975/anthropic}"
 HOST="${FOUNDRY_HOST#*://}"; HOST="${HOST%%/*}"; HOST="${HOST%%:*}"
 PROBE_URL="https://${HOST}/openai/v1/chat/completions"
 
-if ! curl -sf --max-time 3 http://localhost:1064/health >/dev/null 2>&1; then
-  echo "Gateway is not running. Start it first:  ./start-gateway.sh" >&2
-  exit 1
-fi
 
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/demo_cache_gw.XXXXXX")"
-trap 'rm -rf "$STATE"' EXIT
+GW_PID=""
+cleanup() { [[ -n $GW_PID ]] && kill "$GW_PID" 2>/dev/null; rm -rf "$STATE"; }
+trap cleanup EXIT
 HISTORY="$STATE/history.json"; echo '[]' > "$HISTORY"
 TOTALS="$STATE/totals.json"; echo '{"turns":0,"in":0,"cached":0,"out":0,"ms":0}' > "$TOTALS"
 
@@ -229,10 +231,67 @@ print(f"   without cache  ${nocache:.5f}"
 EOF
 }
 
+# Start (or restart) the gateway pinned to $1 as the cache key.
+start_gateway() {
+  local key=$1
+  if [[ -n $GW_PID ]]; then
+    kill "$GW_PID" 2>/dev/null; wait "$GW_PID" 2>/dev/null; GW_PID=""
+  fi
+  pkill -f "aigw run" 2>/dev/null
+  sleep 1
+  CACHE_KEY="$key" ./start-gateway.sh > "$STATE/gateway.log" 2>&1 &
+  GW_PID=$!
+  printf '\033[2m   starting gateway with cache key %s' "$key"
+  for _ in $(seq 90); do
+    if curl -sf --max-time 2 http://localhost:1064/health >/dev/null 2>&1; then
+      # the data plane lags the admin port — probe until it actually answers
+      for _ in $(seq 30); do
+        if [[ -n "$(curl -s --max-time 5 "$GW/v1/messages" \
+              -H 'content-type: application/json' \
+              -d '{"model":"probe","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}' \
+              2>/dev/null)" ]]; then
+          printf ' ready\033[0m\n'; ACTIVE_KEY="$key"; return 0
+        fi
+        sleep 1
+      done
+      break
+    fi
+    printf '.'; sleep 1
+  done
+  printf '\033[0m\n'
+  echo "error: gateway did not come up. See $STATE/gateway.log" >&2
+  tail -5 "$STATE/gateway.log" >&2
+  return 1
+}
+
+choose_key() {
+  bold "Pick a cache key" >&2
+  dim  "  Requests sharing a key reuse the same cached prompt." >&2
+  echo "   1) k1      2) k2      3) k3" >&2
+  local pick
+  while true; do
+    printf '\033[1;36mkey>\033[0m ' >&2
+    IFS= read -r pick || return 1
+    case "${pick// /}" in
+      1|k1) echo "k1"; return 0 ;;
+      2|k2) echo "k2"; return 0 ;;
+      3|k3) echo "k3"; return 0 ;;
+      "")   continue ;;
+      *)    dim "   pick 1, 2 or 3" >&2 ;;
+    esac
+  done
+}
+
 bold "Prompt cache demo · through the gateway"
 dim  "Claude Code format → localhost:1975 → Foundry → ${FOUNDRY_MODEL} (caches)"
-dim  "cache key in force: ${CACHE_KEY}   (set by the gateway, fleet-wide)"
-dim  "/again  /new  /key  /stats  exit"
+echo
+
+ACTIVE_KEY=""
+KEY_CHOICE="$(choose_key)" || exit 0
+start_gateway "$KEY_CHOICE" || exit 1
+
+hr
+dim  "cache key: ${ACTIVE_KEY}    ·    /again  /new  /key  /stats  exit"
 hr
 
 LAST=""
@@ -245,9 +304,16 @@ while true; do
     exit|quit|/exit|/quit) break ;;
     /stats) echo; show_stats; continue ;;
     /key)
-      dim "   ${CACHE_KEY}"
-      dim "   Set by bodyMutation in aigw-foundry.yaml, from CACHE_KEY in .env."
-      dim "   To route on a different key: change it there and restart the gateway."
+      dim "   current: ${ACTIVE_KEY}"
+      NEW_KEY="$(choose_key)" || continue
+      if [[ $NEW_KEY == "$ACTIVE_KEY" ]]; then
+        dim "   unchanged"
+      else
+        start_gateway "$NEW_KEY" || break
+        echo '[]' > "$HISTORY"
+        dim "   now on ${ACTIVE_KEY} — conversation cleared"
+        dim "   note: a prefix cached on many replicas may still hit under a new key"
+      fi
       continue ;;
     /new)
       echo '[]' > "$HISTORY"
@@ -261,14 +327,14 @@ while true; do
     /help)
       dim "   /again   re-send the last prompt"
       dim "   /new     clear conversation, keep the cached system prompt"
-      dim "   /key     show the cache key the gateway is injecting"
+      dim "   /key     switch cache key (restarts the gateway)"
       dim "   /stats   session totals"
       continue ;;
   esac
 
   echo
   python3 "$PY" "$GW" "$PROBE_URL" "$AZURE_API_KEY" "$FOUNDRY_MODEL" \
-          "$CACHE_KEY" "$line" "$HISTORY" "$STATE/system.txt" "$TOTALS"
+          "$ACTIVE_KEY" "$line" "$HISTORY" "$STATE/system.txt" "$TOTALS"
   LAST="$line"
 done
 

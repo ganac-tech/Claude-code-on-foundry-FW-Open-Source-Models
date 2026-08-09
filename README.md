@@ -146,10 +146,32 @@ served entirely from cache.
 | `demo_cache_gateway.sh` | **through the gateway** | a one-token probe |
 
 `demo_cache_gateway.sh` is the realistic one: your prompt takes the same path
-Claude Code takes, and GLM does the caching. Before each turn it sends a
-one-token probe straight to Foundry with the same prefix and the same
-`prompt_cache_key` the gateway injects, and reads the cache meter off that.
+Claude Code takes, and GLM does the caching. It starts the gateway for you — no
+separate terminal — and asks which cache key to use first:
+
+```
+Pick a cache key
+   1) k1      2) k2      3) k3
+key> 1
+
+you> What is 17 * 23? Reply with just the number.
+   391
+   ─ in 537  ·  cached 536 (100%)  ·  out 74 ─ CACHE HIT
+
+you> /key            # switch to k2, gateway restarts
+you> What is 17 * 23? Reply with just the number.
+   391
+   ─ in 517  ·  cached 10 (2%)  ·  out 6 ─ cold
+```
+
+Before each turn it sends a one-token probe straight to Foundry with the same
+prefix and the same key the gateway injects, and reads the cache meter off that.
 Input and output tokens still come from the gateway's own response.
+
+Switching keys restarts the gateway because the key cannot come from the client.
+`prompt_cache_key` is not a field in the Anthropic Messages API, so a client that
+sends one has it dropped in translation — measured. It has to be injected by the
+gateway's own config.
 
 Caching is keyed on `CACHE_KEY` from `.env`, which the gateway stamps onto every
 request. It is deliberately one key for the whole fleet: every Claude Code user

@@ -13,10 +13,16 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
+# A caller may preset CACHE_KEY (demo_cache_gateway.sh does) — .env must not
+# clobber it, so stash it across the source.
+_PRESET_CACHE_KEY="${CACHE_KEY:-}"
+
 set -a
 # shellcheck disable=SC1091
 source .env
 set +a
+
+[[ -n $_PRESET_CACHE_KEY ]] && CACHE_KEY="$_PRESET_CACHE_KEY"
 
 : "${FOUNDRY_HOST:?set FOUNDRY_HOST in .env}"
 : "${AZURE_API_KEY:?set AZURE_API_KEY in .env}"
