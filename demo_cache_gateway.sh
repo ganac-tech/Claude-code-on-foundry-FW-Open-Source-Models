@@ -27,6 +27,16 @@
 # input and output tokens come from the gateway's own response; only the cached
 # figure comes from the probe. ./demo_cache_direct.sh is the direct-only version.
 #
+# ── what you will actually see ──────────────────────────────────────────────
+# The cached figure is almost entirely the system prompt above — ~500 tokens
+# sent on every turn. Your question is a few dozen tokens and barely moves it.
+# That is the real shape of the problem: a coding agent's fixed instructions
+# dwarf anything the user types, which is exactly why caching them pays.
+#
+# Hits are not deterministic. The cache lives in replica memory, so a repeat
+# usually hits but can land on a replica that has not seen your prefix and come
+# back cold. Run a few turns rather than judging it on one.
+#
 # ── session affinity ────────────────────────────────────────────────────────
 # The gateway pins `prompt_cache_key` to CACHE_KEY from .env, via bodyMutation
 # in aigw-foundry.yaml. That is deliberate and fleet-wide: every Claude Code
@@ -70,7 +80,17 @@ TOTALS="$STATE/totals.json"; echo '{"turns":0,"in":0,"cached":0,"out":0,"ms":0}'
 
 # Stands in for the ~15k tokens of instructions a real coding agent sends every
 # turn — caching only pays off on a substantial shared prefix.
-cat > "$STATE/system.txt" <<'SYSTEM'
+#
+# The marker on the first line is unique per run. Without it the prompt would be
+# byte-identical to every previous run and already cached across the pool, so the
+# first turn would report a hit and you would never see a cold start. /cold
+# regenerates it.
+write_system() {
+  { echo "Session $1. Treat this line as an identifier and ignore it."
+    cat "$STATE/system.base"; } > "$STATE/system.txt"
+}
+
+cat > "$STATE/system.base" <<'SYSTEM'
 You are a senior backend engineer reviewing and writing production Python.
 
 General approach:
@@ -119,6 +139,9 @@ Answer format:
   what the reader would do.
 - Code blocks are complete and runnable, not fragments with ellipses.
 SYSTEM
+
+MARKER="$(python3 -c 'import uuid;print(uuid.uuid4().hex[:10])')"
+write_system "$MARKER"
 
 PY="$STATE/turn.py"
 cat > "$PY" <<'PYEOF'
@@ -291,7 +314,9 @@ KEY_CHOICE="$(choose_key)" || exit 0
 start_gateway "$KEY_CHOICE" || exit 1
 
 hr
-dim  "cache key: ${ACTIVE_KEY}    ·    /again  /new  /key  /stats  exit"
+dim  "cache key: ${ACTIVE_KEY}    ·    /again  /cold  /new  /key  /stats  exit"
+dim  "cached = the ~500-token system prompt, not your question"
+dim  "repeats usually hit, but routing can land you on a cold replica"
 hr
 
 LAST=""
@@ -315,6 +340,13 @@ while true; do
         dim "   note: a prefix cached on many replicas may still hit under a new key"
       fi
       continue ;;
+    /cold)
+      MARKER="$(python3 -c 'import uuid;print(uuid.uuid4().hex[:10])')"
+      write_system "$MARKER"
+      echo '[]' > "$HISTORY"
+      dim "   system prompt changed (marker ${MARKER}) — content nothing has"
+      dim "   seen before, so the next turn is genuinely cold on any key"
+      continue ;;
     /new)
       echo '[]' > "$HISTORY"
       dim "   conversation cleared — the cached system prompt survives, so"
@@ -326,6 +358,7 @@ while true; do
       line="$LAST" ;;
     /help)
       dim "   /again   re-send the last prompt"
+      dim "   /cold    new system prompt — forces a real cold start"
       dim "   /new     clear conversation, keep the cached system prompt"
       dim "   /key     switch cache key (restarts the gateway)"
       dim "   /stats   session totals"
