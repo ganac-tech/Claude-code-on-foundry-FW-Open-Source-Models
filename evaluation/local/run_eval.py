@@ -6,7 +6,7 @@
   python3 evaluation/local/run_eval.py evaluation/local/bug_fix_clean.jsonl -n 100 -c 8  # 100 cases, 8 at a time
 
 Talks to /anthropic/v1/messages directly rather than shelling out to Claude Code:
-same gateway, same translation, but without ~15k tokens of Claude Code system
+same gateway, same translation, but without ~24k tokens of Claude Code system
 prompt and tools on every request — which would dominate cost and could itself
 change the answers.
 

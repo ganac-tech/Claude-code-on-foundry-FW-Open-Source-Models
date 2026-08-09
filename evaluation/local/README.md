@@ -62,7 +62,7 @@ Three independent signals, because exact match alone misleads on code:
 | `exact` | byte-equal after stripping markdown fences. Brittle: a correct fix formatted differently scores 0. |
 
 `run_eval.py` calls `/anthropic/v1/messages` directly rather than shelling out to
-Claude Code. Same gateway, same Anthropic→OpenAI translation, but without ~15k
+Claude Code. Same gateway, same Anthropic→OpenAI translation, but without ~24k
 tokens of Claude Code system prompt and tool definitions per request — which
 would dominate cost and could itself change the answers.
 

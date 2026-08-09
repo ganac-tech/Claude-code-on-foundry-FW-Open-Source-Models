@@ -79,7 +79,7 @@ trap cleanup EXIT
 HISTORY="$STATE/history.json"; echo '[]' > "$HISTORY"
 TOTALS="$STATE/totals.json"; echo '{"turns":0,"in":0,"cached":0,"out":0,"ms":0}' > "$TOTALS"
 
-# Stands in for the ~15k tokens of instructions a real coding agent sends every
+# Stands in for the ~24k tokens of instructions a real coding agent sends every
 # turn — caching only pays off on a substantial shared prefix.
 #
 # The marker on the first line is unique per run. Without it the prompt would be

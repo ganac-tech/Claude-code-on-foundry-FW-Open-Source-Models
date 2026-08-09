@@ -115,7 +115,39 @@ Or launch a full interactive Claude Code session:
 ./claude-foundry.sh
 ```
 
+---
+
+## Which scripts actually run Claude Code
+
+Worth being precise about, because only two of them do.
+
+| script | runs the `claude` CLI? | what sends the request |
+|---|---|---|
+| `demo.sh` | **yes** — `claude -p "$q"` | Claude Code |
+| `claude-foundry.sh` | **yes** — `exec claude` | Claude Code |
+| `smoke-test.sh` | no | `curl` |
+| `cache_architecture/demo_cache_gateway.sh` | no | a Python heredoc |
+| `cache_architecture/demo_cache_direct.sh` | no | a Python heredoc |
+| `cache_architecture/cache_monitor.py` | no (but it *records* Claude Code) | Python |
+
+Every one of them speaks the **same Anthropic Messages API to the same gateway
+endpoint**, so the gateway cannot tell them apart and does identical work for
+each. The difference is only who builds the request.
+
+The cache and test scripts skip Claude Code deliberately. Claude Code sends
+**24,074 tokens** of system prompt and tool definitions on every request
+(measured — see below), which would swamp the token numbers those scripts exist
+to show. They send a ~500-token prompt instead so the figures stay legible.
+
+Nothing here calls an Anthropic model. `"model": "claude-opus-5"` appears in the
+request bodies because the field is required and Claude Code really sends it —
+the gateway's `bodyMutation` overwrites it with `FW-GLM-5.2-standard` before the
+request leaves your laptop. There is no Anthropic credential in this repo;
+Claude Code is given the literal placeholder `gateway-injected`.
+
 ### Watching the prompt cache
+
+*(These two do not use Claude Code — see the table above.)*
 
 `cache_architecture/demo_cache_direct.sh` shows what every turn cost in tokens, including how much came
 out of the prompt cache:
@@ -134,11 +166,20 @@ you> /again
 prompt starts cold again, and `/stats` totals the session with what the cache
 saved.
 
-There are two versions, because the gateway cannot report cache reads. Envoy AI
-Gateway v1.0.0 does not carry the upstream
-`usage.prompt_tokens_details.cached_tokens` field into the Anthropic response,
-so asking it how much was cached always returns zero — even on a request GLM
-served entirely from cache.
+There are two versions, because **the gateway cannot report cache reads at
+all**. Envoy AI Gateway v1.0.0 drops the upstream
+`usage.prompt_tokens_details.cached_tokens` field in translation, and it is
+missing from the metrics endpoint too — even though `aigw-foundry.yaml` asks for
+it via `llmRequestCosts: CachedInputToken`:
+
+```
+$ curl -s localhost:1064/metrics | grep -o 'gen_ai_token_type="[a-z_]*"' | sort -u
+gen_ai_token_type="input"
+gen_ai_token_type="output"          # no "cached" type exists
+```
+
+So asking the gateway how much was cached always returns zero — even on a
+request GLM served entirely from cache.
 
 | | traffic path | where the cached number comes from |
 |---|---|---|
@@ -177,6 +218,50 @@ Caching is keyed on `CACHE_KEY` from `.env`, which the gateway stamps onto every
 request. It is deliberately one key for the whole fleet: every Claude Code user
 sends the same large system prompt, so a shared key lets them all reuse one
 cached copy of it. A key per user would split it up and cost more.
+
+### Measuring a real Claude Code fleet
+
+The two demos above measure their own prompts. Neither can measure Claude Code,
+because the per-turn probe only works when the script knows its own prefix and
+can replay it — you cannot do that to Claude Code.
+
+`cache_architecture/cache_monitor.py` measures it from the side. Capture the
+prefix Claude Code actually sends, once, then re-send it on a timer straight to
+Foundry and read the cache meter off the response:
+
+```bash
+python3 cache_architecture/cache_monitor.py capture
+# in another terminal, one throwaway message through the recorder:
+ANTHROPIC_BASE_URL=http://localhost:1976/anthropic claude -p hi
+
+python3 cache_architecture/cache_monitor.py watch --interval 60
+```
+
+```
+prefix    captured prefix (.claude-code-prefix.json) · ~25,373 tokens
+
+08:37:31  cached      10 /  24,074  (  0.0%)  1,591ms  cold
+08:37:47  cached  24,073 /  24,074  (100.0%)    807ms  HIT
+08:38:03  cached  24,073 /  24,074  (100.0%)    821ms  HIT
+```
+
+Claude Code's fixed prefix is **24,074 tokens** — its system prompt plus 26 tool
+definitions, identical on every request and identical across every developer.
+Once warm, all but one token of it is served from cache at a tenth of the input
+price. That is the whole argument for a single fleet-wide `CACHE_KEY`.
+
+Every sample lands in a CSV (`ts,prompt_tokens,cached_tokens,pct,latency_ms,status`).
+`429`s are recorded but excluded from the hit rate — a rate limit is not a cache
+miss, and counting it as one invents hit-rate collapses that never happened.
+
+**What this does and does not tell you.** It tracks whether that prefix stays
+resident on the replicas your cache key routes to, which is the thing that
+actually varies. It is not a per-user hit rate: a developer whose conversation
+has grown well past the captured prefix is not represented. Treat it as a
+leading indicator, and your Azure invoice as the authoritative number.
+
+The captured prefix file is gitignored — it is Claude Code's own system prompt,
+and not ours to republish.
 
 ---
 
@@ -270,16 +355,16 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 
 ## Files
 
-| | |
-|---|---|
-| `aigw-foundry.yaml` | Gateway config |
-| `start-gateway.sh` | Loads `.env`, runs the gateway |
-| `demo.sh` | Interactive prompt |
-| `cache_architecture/` | Prompt-cache demos and how the cache behaves — see its README |
-| `claude-foundry.sh` | Full Claude Code session |
-| `smoke-test.sh` | 11 checks against a running gateway |
-| `architecture/` | Diagram and how the pieces fit — see `architecture/README.md` |
-| `evaluation/` | Azure Foundry + local evaluation — see `evaluation/README.md` |
+| | | runs Claude Code |
+|---|---|---|
+| `aigw-foundry.yaml` | Gateway config | — |
+| `start-gateway.sh` | Loads `.env`, runs the gateway | — |
+| `demo.sh` | Interactive prompt | **yes** |
+| `claude-foundry.sh` | Full Claude Code session | **yes** |
+| `cache_architecture/` | Prompt-cache demos and monitor — see its README | no |
+| `smoke-test.sh` | 11 checks against a running gateway | no |
+| `architecture/` | Diagram and how the pieces fit — see `architecture/README.md` | — |
+| `evaluation/` | Azure Foundry + local evaluation — see `evaluation/README.md` | no |
 
 ## Running it in Kubernetes
 

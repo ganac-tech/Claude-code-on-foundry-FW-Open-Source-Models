@@ -61,7 +61,7 @@ new_key() { echo "sess-$(python3 -c 'import uuid;print(uuid.uuid4().hex[:12])')"
 CACHE_KEY_SESSION="$(new_key)"
 
 # A realistic system prompt. Prompt caching only pays off on a substantial
-# shared prefix — this stands in for the ~15k tokens of instructions and tool
+# shared prefix — this stands in for the ~24k tokens of instructions and tool
 # definitions a real coding agent sends on every single turn.
 cat > "$STATE/system.txt" <<'SYSTEM'
 You are a senior backend engineer reviewing and writing production Python.

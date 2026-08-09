@@ -10,6 +10,11 @@ bin/
 # generated at gateway start (embeds the host CA bundle)
 .aigw-foundry.generated.yaml
 
+# Captured Claude Code prefix: ~24k tokens of its system prompt and tool
+# definitions. Machine-local measurement input, and not ours to republish.
+cache_architecture/.claude-code-prefix.json
+cache-monitor.csv
+
 # local run artifacts
 .venv/
 evaluation/local/*.results.jsonl

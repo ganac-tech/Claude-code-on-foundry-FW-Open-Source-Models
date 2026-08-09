@@ -1,14 +1,45 @@
 # Prompt cache
 
-Two scripts that show what every turn costs in tokens, and how much of it came
-out of GLM 5.2's prompt cache.
+What every turn costs in tokens, and how much of it came out of GLM 5.2's
+prompt cache.
 
 ```bash
 ./cache_architecture/demo_cache_gateway.sh   # through the gateway — the real path
 ./cache_architecture/demo_cache_direct.sh    # straight to Foundry
+python3 cache_architecture/cache_monitor.py  # measure a real Claude Code fleet
 ```
 
 Run them from anywhere; they locate the repo root themselves.
+
+## None of the demos run Claude Code
+
+Worth stating up front, because the request bodies look like they do.
+
+| | runs the `claude` CLI? | what builds the request |
+|---|---|---|
+| `demo_cache_gateway.sh` | no | an inline Python heredoc |
+| `demo_cache_direct.sh` | no | an inline Python heredoc |
+| `cache_monitor.py` | no — but it **records** Claude Code once | Python |
+| *(repo root)* `demo.sh`, `claude-foundry.sh` | **yes** | Claude Code |
+
+`demo_cache_gateway.sh` sends **the same Anthropic Messages request to the same
+gateway endpoint** Claude Code uses, so the gateway does identical work. Only
+the sender differs.
+
+That is deliberate. Claude Code sends 24,074 tokens of system prompt and tool
+definitions on every request — it would swamp the token figures these scripts
+exist to show. They send a ~500-token prompt so the numbers stay readable. To
+measure the real thing, use `cache_monitor.py` below.
+
+Two details that keep causing the same question:
+
+- **`"model": "claude-opus-5"`** in the request body is a required field that is
+  immediately discarded. The gateway's `bodyMutation` overwrites it with
+  `FOUNDRY_MODEL` before the request leaves your laptop. It is set to the string
+  Claude Code really sends so the access log shows the rewrite.
+- **No Anthropic model is involved anywhere.** Translation is deterministic Go
+  code in the gateway's external processor — field renames, not inference. There
+  is no Anthropic credential in this repo.
 
 ---
 
@@ -40,9 +71,10 @@ That 512 is the system prompt. Your question is a few dozen tokens and barely
 moves the number.
 
 This is the real shape of the problem, not an artifact of the demo. Claude Code
-sends roughly **15,000 tokens** of instructions and tool definitions on every
-single turn, identical each time, before the user has typed anything. That fixed
-prefix dwarfs the conversation — which is exactly why caching it is worth doing.
+sends **24,074 tokens** of instructions and tool definitions on every single
+turn — measured with `cache_monitor.py` below — identical each time, before the
+user has typed anything. That fixed prefix dwarfs the conversation, which is
+exactly why caching it is worth doing.
 
 ## The cache key is a routing hint, not a partition
 
@@ -82,7 +114,7 @@ bytes nothing has ever seen.
 The instinct is a key per user or per session. For Claude Code that is
 backwards and costs money.
 
-Every user sends the same ~15k system prompt. One shared key keeps them all on
+Every user sends the same ~24k system prompt. One shared key keeps them all on
 the same cached copy. A key per user splits that into one entry per person, so
 everyone pays their own cold start and nobody shares.
 
@@ -101,10 +133,22 @@ one.
 
 ## Why there are two scripts
 
-The gateway cannot tell you how much was cached. Envoy AI Gateway v1.0.0 does
-not carry the upstream OpenAI field `usage.prompt_tokens_details.cached_tokens`
-into the Anthropic response it returns, so asking it always yields zero — even
-on a request GLM served entirely from cache.
+The gateway cannot tell you how much was cached — **anywhere**. Envoy AI Gateway
+v1.0.0 drops the upstream OpenAI field
+`usage.prompt_tokens_details.cached_tokens` in translation, so the Anthropic
+response it returns always says zero even on a request GLM served entirely from
+cache. The metrics endpoint is no help either, despite `aigw-foundry.yaml`
+requesting the figure via `llmRequestCosts: CachedInputToken`:
+
+```
+$ curl -s localhost:1064/metrics | grep -o 'gen_ai_token_type="[a-z_]*"' | sort -u
+gen_ai_token_type="input"
+gen_ai_token_type="output"          # there is no "cached" type
+```
+
+Measured directly: two identical requests three seconds apart, both returning
+`cache_read_input_tokens: 0` through the gateway, while the same prefix queried
+straight to Foundry reported 24,073 tokens cached.
 
 | | traffic path | cached number from |
 |---|---|---|
@@ -119,6 +163,60 @@ come from the gateway's own response, and the output line says which is which.
 The probe runs *before* the turn on purpose. It warms the cache itself, so
 probing afterwards would report a hit every time and the cold case would never
 appear.
+
+## Measuring a real fleet — `cache_monitor.py`
+
+The probe trick does not transfer to Claude Code. It works only because the
+script knows its own prefix and can replay it byte for byte; you cannot
+intercept Claude Code's prefix mid-conversation and do the same.
+
+So measure from the side. Capture the prefix once, then re-send it on a timer
+straight to Foundry:
+
+```bash
+python3 cache_architecture/cache_monitor.py capture
+# in another terminal — one throwaway message through the recorder:
+ANTHROPIC_BASE_URL=http://localhost:1976/anthropic claude -p hi
+
+python3 cache_architecture/cache_monitor.py watch --interval 60
+```
+
+`capture` stands a recorder up on port 1976 in place of the gateway, keeps the
+`system` and `tools` fields off the first request that arrives, and returns a
+canned reply so the CLI exits cleanly. Measured on this deployment:
+
+```
+prefix    captured prefix (.claude-code-prefix.json) · ~25,373 tokens
+
+08:37:31  cached      10 /  24,074  (  0.0%)  1,591ms  cold
+08:37:47  cached  24,073 /  24,074  (100.0%)    807ms  HIT
+08:38:03  cached  24,073 /  24,074  (100.0%)    821ms  HIT
+08:38:19  cached  24,073 /  24,074  (100.0%)  2,994ms  HIT
+```
+
+**24,074 tokens** — a system prompt plus 26 tool definitions, byte-identical on
+every request and across every developer. Once warm, all but one token of it
+costs a tenth of the uncached rate. That single number is the entire argument
+for one fleet-wide `CACHE_KEY`.
+
+Options: `--interval` (default 60s), `--samples N` (default 0, run until
+Ctrl-C), `--prefix FILE`, `--out FILE`. Without a captured prefix it falls back
+to a synthetic one of similar size and says so.
+
+Every sample appends to a CSV — `ts,prompt_tokens,cached_tokens,pct,latency_ms,status`.
+`429`s are logged but kept out of the hit rate: a rate limit is not a cache
+miss, and counting it as one manufactures hit-rate collapses that never
+happened. At a 4-second interval this deployment's 66 req/min cap produces them
+steadily; at the 60s default it does not.
+
+**What it does and does not tell you.** It tracks whether that prefix stays
+resident on the replicas your key routes to — the thing that actually varies,
+and a good leading indicator. It is *not* a per-user hit rate: a developer whose
+conversation has grown well past the captured prefix is not represented. Your
+Azure invoice remains the authoritative number.
+
+`.claude-code-prefix.json` is gitignored. It is Claude Code's own system prompt
+and tool definitions — measurement input, and not ours to republish.
 
 ## Commands
 
