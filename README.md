@@ -120,38 +120,93 @@ Or launch a full interactive Claude Code session:
 
 ---
 
-## Things that will bite you
+## What the translation actually does
 
-**The Anthropic API is at `/anthropic/v1/messages`, not `/v1/messages`.**
-Undocumented. The gateway registers processors by exact path, so the root
-returns `404 unsupported path`. This is why `ANTHROPIC_BASE_URL` must end in
-`/anthropic` — Claude Code appends `/v1/messages` itself.
+Everything below is captured from a live run — Claude Code's request on the
+left, what Foundry receives and returns on the right.
 
-**Use the deployment name, not the model name.** `FW-GLM-5.2` gets
-`404 DeploymentNotFound` when the deployment is actually `FW-GLM-5.2-standard`.
-The endpoint and key are fine; only the name is wrong.
+### Request: Anthropic → OpenAI
 
-**Auth is `AzureAPIKey`, not `APIKey`.** Foundry wants the `api-key` header;
-plain `APIKey` sends `Authorization: Bearer` and fails.
+| Anthropic (in) | OpenAI (out) |
+|---|---|
+| `POST /anthropic/v1/messages` | `POST /openai/v1/chat/completions` |
+| `"model": "claude-opus-5"` | `"model": "FW-GLM-5.2-standard"` — pinned by `bodyMutation` |
+| `"system": "You are a weather assistant."` | prepended to `messages` as `{"role":"system", ...}` |
+| `"max_tokens": 1024` | `"max_completion_tokens": 1024` |
+| `tools[].input_schema` | `tools[].function.parameters`, wrapped in `{"type":"function","function":{…}}` |
+| `"tool_choice": {"type":"any"}` | `"tool_choice": "required"` |
+| `"stream": true` | `"stream": true` + `"stream_options":{"include_usage":true}` |
+| — | `api-key: <AZURE_API_KEY>` header injected |
 
-**`wellKnownCACertificates: "System"` does not work on macOS.** It resolves to a
-Linux CA path that doesn't exist, and every request dies with
-`TLS_error:_Secret_is_not_supplied_by_SDS` → HTTP 503. `start-gateway.sh` builds
-a CA ConfigMap from the host bundle instead. On Linux the plain `"System"` form
-works and this scaffolding is unnecessary.
+### Response: OpenAI → Anthropic
 
-**GLM 5.2 reasons before answering — give it token headroom.** At
-`max_tokens: 64` the whole budget goes to reasoning, no content block is
-produced, and it looks like a broken gateway. Claude Code sets its own generous
-limit, so this only bites hand-rolled curl tests.
+What Foundry returns:
 
-**Don't demo with "what model are you?"** Claude Code's system prompt tells the
-model it is Claude, and GLM complies. The `[gateway] served_by=...` line is the
-real proof.
+```json
+{
+  "choices": [{
+    "message": {
+      "content": "",
+      "reasoning_content": "The user wants the weather in Paris. I'll call get_weather...",
+      "tool_calls": [{
+        "id": "chatcmpl-tool-a9cd45",
+        "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}
+      }]
+    },
+    "finish_reason": "tool_calls"
+  }],
+  "usage": {"prompt_tokens": 173, "completion_tokens": 34}
+}
+```
 
-Two harmless warnings on first run: claude.ai connectors disabled (because an
-auth token is set), and an unrecognized model name (so a 200k context window is
-assumed). Set `GLM_CONTEXT_TOKENS` in `.env` to silence the second.
+What Claude Code receives:
+
+```json
+{
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {"type": "thinking", "thinking": "The user wants the weather in Paris. I'll call get_weather..."},
+    {"type": "tool_use", "id": "chatcmpl-tool-bd2efe", "name": "get_weather",
+     "input": {"city": "Paris"}}
+  ],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 173, "output_tokens": 37}
+}
+```
+
+| OpenAI | Anthropic |
+|---|---|
+| `message.content` | `content[]` block of `{"type":"text"}` |
+| `message.reasoning_content` | `content[]` block of `{"type":"thinking"}` |
+| `message.tool_calls[]` | `content[]` block of `{"type":"tool_use"}` |
+| `function.arguments` — a JSON **string** | `input` — a parsed **object** |
+| `finish_reason: "stop"` | `stop_reason: "end_turn"` |
+| `finish_reason: "tool_calls"` | `stop_reason: "tool_use"` |
+| `finish_reason: "length"` | `stop_reason: "max_tokens"` |
+| `usage.prompt_tokens` | `usage.input_tokens` |
+| `usage.completion_tokens` | `usage.output_tokens` |
+
+The `reasoning_content` → `thinking` mapping is what makes a reasoning model
+like GLM 5.2 usable from Claude Code at all — without it the reasoning would be
+dropped or leak into the visible answer.
+
+### Streaming
+
+One OpenAI chunk stream becomes the Anthropic SSE event sequence:
+
+```
+event: message_start        {"message":{"id":…,"model":"accounts/fireworks/models/glm-5p2",…}}
+event: content_block_start  {"index":0,"content_block":{"type":"text","text":""}}
+event: content_block_delta  {"index":0,"delta":{"type":"text_delta","text":"one"}}
+event: content_block_delta  {"index":0,"delta":{"type":"text_delta","text":" two"}}
+event: content_block_stop   {"index":0}
+event: message_delta        {"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":103}}
+event: message_stop
+```
+
+Token usage arrives once, in the final `message_delta` — the `usage` on
+`message_start` is always zero.
 
 ## Files
 
