@@ -2,7 +2,7 @@
 .env
 
 # Local working notes — not published.
-eval/FOUNDRY-NOTES.md
+evaluation/local/FOUNDRY-NOTES.md
 
 # 288MB binary — install per README instead
 bin/
@@ -12,7 +12,7 @@ bin/
 
 # local run artifacts
 .venv/
-eval/*.results.jsonl
+evaluation/local/*.results.jsonl
 test/upstream-requests.jsonl
 archive.zip
 __pycache__/

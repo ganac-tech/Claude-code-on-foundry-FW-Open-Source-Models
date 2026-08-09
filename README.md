@@ -217,7 +217,7 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 | `demo.sh` | Interactive prompt |
 | `claude-foundry.sh` | Full Claude Code session |
 | `smoke-test.sh` | 11 checks against a running gateway |
-| `eval/` | Optional bug-fix evaluation — see `eval/README.md` |
+| `evaluation/` | Azure Foundry + local evaluation — see `evaluation/README.md` |
 
 ## Running it in Kubernetes
 

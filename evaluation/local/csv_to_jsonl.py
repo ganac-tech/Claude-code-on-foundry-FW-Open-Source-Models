@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Convert code_bug_fix_pairs.csv to JSONL for model evaluation.
 
-  python3 eval/csv_to_jsonl.py                      # all 1000 rows -> eval/bug_fix.jsonl
-  python3 eval/csv_to_jsonl.py --clean              # drop broken cases
-  python3 eval/csv_to_jsonl.py --dedup              # one row per distinct template (10)
-  python3 eval/csv_to_jsonl.py --clean --dedup -o eval/bug_fix_clean.jsonl
+  python3 evaluation/local/csv_to_jsonl.py                      # all 1000 rows -> evaluation/local/bug_fix.jsonl
+  python3 evaluation/local/csv_to_jsonl.py --clean              # drop broken cases
+  python3 evaluation/local/csv_to_jsonl.py --dedup              # one row per distinct template (10)
+  python3 evaluation/local/csv_to_jsonl.py --clean --dedup -o evaluation/local/bug_fix_clean.jsonl
 
 Each output line:
 
@@ -39,7 +39,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 SAMPLE_ID_RE = re.compile(r"\n?# Sample ID: \d+\s*$")
 
 PROMPT = (
@@ -59,9 +59,9 @@ def strip_marker(s: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--csv", default=str(ROOT / "code_bug_fix_pairs.csv"))
+    ap.add_argument("--csv", default=str(ROOT / "evaluation" / "code_bug_fix_pairs.csv"))
     ap.add_argument("-o", "--out", default=None,
-                    help="output path (default eval/bug_fix[_clean][_dedup].jsonl)")
+                    help="output path (default evaluation/local/bug_fix[_clean][_dedup].jsonl)")
     ap.add_argument("--clean", action="store_true",
                     help="drop rows flagged no_op or rewrites_literal")
     ap.add_argument("--dedup", action="store_true",

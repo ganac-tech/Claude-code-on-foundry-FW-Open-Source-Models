@@ -1,9 +1,9 @@
 # Bug-fix eval — `code_bug_fix_pairs.csv` → JSONL → GLM 5.2
 
 ```bash
-python3 eval/csv_to_jsonl.py --clean --dedup          # build the dataset
+python3 evaluation/local/csv_to_jsonl.py --clean --dedup          # build the dataset
 ./start-gateway.sh                                    # terminal 1
-python3 eval/run_eval.py eval/bug_fix_clean_dedup.jsonl
+python3 evaluation/local/run_eval.py evaluation/local/bug_fix_clean_dedup.jsonl
 ```
 
 ## Read this before trusting any number from this dataset
