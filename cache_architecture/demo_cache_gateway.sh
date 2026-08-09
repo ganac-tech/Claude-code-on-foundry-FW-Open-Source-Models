@@ -54,7 +54,8 @@
 # still hit under a brand-new key.
 set -uo pipefail
 
-cd "$(dirname "$0")"
+# Run from the repo root: .env, start-gateway.sh and bin/aigw all live there.
+cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 [[ -f .env ]] || { echo "error: .env not found. Copy .env.example to .env." >&2; exit 1; }
 set -a; . ./.env; set +a
