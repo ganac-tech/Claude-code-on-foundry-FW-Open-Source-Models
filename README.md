@@ -115,6 +115,31 @@ Or launch a full interactive Claude Code session:
 ./claude-foundry.sh
 ```
 
+### Watching the prompt cache
+
+`demo_cache.sh` shows what every turn cost in tokens, including how much came
+out of the prompt cache:
+
+```
+you> What is 17 * 23? Reply with just the number.
+   391
+   ─ in 554  ·  cached 0 (0%)  ·  out 23  ·  1,043ms ─ cold
+
+you> /again
+   391
+   ─ in 574  ·  cached 553 (96%)  ·  out 23  ·  1,036ms ─ CACHE HIT
+```
+
+`/again` re-sends the last prompt, `/newkey` rotates the cache key so the same
+prompt starts cold again, and `/stats` totals the session with what the cache
+saved.
+
+It talks to Foundry's OpenAI endpoint directly rather than through the gateway —
+not a design preference, a limitation. Envoy AI Gateway v1.0.0 does not carry the
+upstream `usage.prompt_tokens_details.cached_tokens` field into the Anthropic
+response, so every request comes back reporting zero cache reads even when
+Foundry served it entirely from cache.
+
 ---
 
 ## What the translation actually does
@@ -212,6 +237,7 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 | `aigw-foundry.yaml` | Gateway config |
 | `start-gateway.sh` | Loads `.env`, runs the gateway |
 | `demo.sh` | Interactive prompt |
+| `demo_cache.sh` | Same, plus per-turn cached / input / output tokens |
 | `claude-foundry.sh` | Full Claude Code session |
 | `smoke-test.sh` | 11 checks against a running gateway |
 | `architecture/` | Diagram and how the pieces fit — see `architecture/README.md` |
