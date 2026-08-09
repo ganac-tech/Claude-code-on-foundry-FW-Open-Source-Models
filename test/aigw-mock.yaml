@@ -1,0 +1,162 @@
+# Offline twin of ../aigw-foundry.yaml.
+#
+# Identical route / schema / prefix / bodyMutation / auth wiring, but the upstream
+# Backend points at the local mock_foundry.py over plain HTTP instead of the real
+# Azure host over TLS. Lets the Anthropic -> OpenAI translation be verified with no
+# Azure credentials and no network.
+#
+# Keep the AIGatewayRoute and AIServiceBackend blocks in sync with the real config.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+# Mirrors the access-log block in ../aigw-foundry.yaml so demo.sh's routing
+# proof can be exercised offline too.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              start_time: "%START_TIME%"
+              request.path: "%REQ(:PATH)%"
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              response_code: "%RESPONSE_CODE%"
+              duration_ms: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    bufferLimit: 50Mi
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: claude-code-to-foundry
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: .*
+      backendRefs:
+        - name: foundry-glm
+          namespace: default
+      timeouts:
+        request: 600s
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: foundry-glm
+  namespace: default
+spec:
+  timeouts:
+    request: 10m
+  schema:
+    name: OpenAI
+    prefix: /openai/v1
+  bodyMutation:
+    set:
+      - path: "model"
+        value: "FW-GLM-5.2"
+  backendRef:
+    name: foundry
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: foundry
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: localhost
+        port: 8931
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: foundry-apikey
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: mock-azure-key
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: foundry-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: foundry-glm
+  type: AzureAPIKey
+  azureAPIKey:
+    secretRef:
+      name: foundry-apikey

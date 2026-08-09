@@ -1,0 +1,19 @@
+# secrets — never commit
+.env
+
+# Internal working notes — kept locally, not for this public repo.
+eval/FOUNDRY-NOTES.md
+
+# 288MB binary — install per README instead
+bin/
+
+# generated at gateway start (embeds the host CA bundle)
+.aigw-foundry.generated.yaml
+
+# local run artifacts
+.venv/
+eval/*.results.jsonl
+test/upstream-requests.jsonl
+archive.zip
+__pycache__/
+*.pyc

@@ -1,0 +1,240 @@
+# Envoy AI Gateway — Claude Code -> Microsoft Foundry (Fireworks FW-GLM-5.2)
+#
+#   Claude Code ──POST /v1/messages──▶  aigw :1975  ──POST /openai/v1/chat/completions──▶  Foundry
+#      (Anthropic Messages API)          [translate]              (OpenAI schema)
+#
+# Why the translation is needed: Fireworks exposes a native Anthropic /v1/messages
+# endpoint, but ONLY on api.fireworks.ai. Fireworks models deployed inside Microsoft
+# Foundry are OpenAI chat-completions ONLY. Claude Code speaks Anthropic. Envoy AI
+# Gateway bridges the two, including streaming SSE, tool_use, and reasoning blocks.
+#
+# Run:  AZURE_API_KEY=... FOUNDRY_HOST=<resource>.services.ai.azure.com \
+#         aigw run aigw-foundry.yaml
+#
+# Requires: envoyproxy/ai-gateway v1.0.0+
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: aigw-run
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: aigw-run
+  namespace: default
+spec:
+  gatewayClassName: aigw-run
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 1975
+  infrastructure:
+    parametersRef:
+      group: gateway.envoyproxy.io
+      kind: EnvoyProxy
+      name: envoy-ai-gateway
+---
+# Access logging: one JSON line per LLM request, so you can see model + token counts
+# as Claude Code drives the gateway. Drop the telemetry block if it's too noisy.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: envoy-ai-gateway
+  namespace: default
+spec:
+  logging:
+    level:
+      default: error
+  telemetry:
+    accessLog:
+      settings:
+        - matches:
+            - "request.headers['x-ai-eg-model'] != ''"
+          sinks:
+            - type: File
+              file:
+                path: /dev/stdout
+          format:
+            type: JSON
+            json:
+              start_time: "%START_TIME%"
+              request.path: "%REQ(:PATH)%"
+              gen_ai.request.model: "%REQ(X-AI-EG-MODEL)%"
+              gen_ai.response.model: "%DYNAMIC_METADATA(io.envoy.ai_gateway:response_model)%"
+              gen_ai.usage.input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_input_token)%"
+              gen_ai.usage.output_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_output_token)%"
+              gen_ai.usage.total_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_total_token)%"
+              gen_ai.usage.cached_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cached_input_token)%"
+              gen_ai.usage.cache_creation_input_tokens: "%DYNAMIC_METADATA(io.envoy.ai_gateway:llm_cache_creation_input_token)%"
+              response_code: "%RESPONSE_CODE%"
+              duration_ms: "%DURATION%"
+              upstream_host: "%UPSTREAM_HOST%"
+              upstream_transport_failure_reason: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
+---
+# Claude Code sends very large request bodies (full file contents, long transcripts).
+# Envoy Gateway's 32KiB default buffer limit will truncate them. 50MiB is the value
+# the upstream aigw examples use.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: ClientTrafficPolicy
+metadata:
+  name: client-buffer-limit
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: aigw-run
+  connection:
+    bufferLimit: 50Mi
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIGatewayRoute
+metadata:
+  name: claude-code-to-foundry
+  namespace: default
+spec:
+  parentRefs:
+    - name: aigw-run
+      kind: Gateway
+      group: gateway.networking.k8s.io
+  rules:
+    # Match every model name Claude Code might send (claude-opus-5, claude-haiku-4-5,
+    # FW-GLM-5.2, ...) and send them all to the one Foundry deployment. The actual
+    # upstream model name is pinned by bodyMutation on the AIServiceBackend below.
+    - matches:
+        - headers:
+            - type: RegularExpression
+              name: x-ai-eg-model
+              value: .*
+      backendRefs:
+        - name: foundry-glm
+          namespace: default
+      timeouts:
+        # Agentic turns at high reasoning effort run long. Keep this generous.
+        request: 600s
+  # Captured into Envoy dynamic metadata per request, then written to the access
+  # log below. This is what eval/gateway_stats.py reads for exact per-request
+  # cost and cache-hit numbers — Azure Monitor does not report either for
+  # partner models like Fireworks GLM.
+  llmRequestCosts:
+    - metadataKey: llm_input_token
+      type: InputToken
+    - metadataKey: llm_output_token
+      type: OutputToken
+    - metadataKey: llm_total_token
+      type: TotalToken
+    - metadataKey: llm_cached_input_token
+      type: CachedInputToken
+    - metadataKey: llm_cache_creation_input_token
+      type: CacheCreationInputToken
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: AIServiceBackend
+metadata:
+  name: foundry-glm
+  namespace: default
+spec:
+  timeouts:
+    request: 10m
+  schema:
+    # Foundry's Fireworks deployments are OpenAI chat-completions only.
+    # Declaring OpenAI here is what makes the gateway translate the inbound
+    # Anthropic /v1/messages request on the way out.
+    name: OpenAI
+    # For schema OpenAI the upstream path is "${prefix}/chat/completions",
+    # giving /openai/v1/chat/completions — the Foundry OpenAI-compatible route.
+    prefix: /openai/v1
+  # Pin the upstream model to the Foundry DEPLOYMENT name, whatever Claude Code
+  # asked for. Without this, a "claude-opus-5" model field reaches Foundry and
+  # comes back as DeploymentNotFound.
+  #
+  # This must be the deployment name, which is NOT necessarily the model name —
+  # the portal commonly appends a suffix (e.g. "FW-GLM-5.2-standard"). List the
+  # real ones with:
+  #   curl -s "https://$FOUNDRY_HOST/openai/deployments?api-version=2023-03-15-preview" \
+  #     -H "api-key: $AZURE_API_KEY" | python3 -m json.tool
+  bodyMutation:
+    set:
+      - path: "model"
+        value: "${FOUNDRY_MODEL}"
+      # Cache-routing key. Claude Code never sets one, so the gateway supplies it.
+      #
+      # Measured on this deployment (eval/cache_key_probe.py, 10 trials/arm,
+      # paced under the 66 req/min cap): same key -> 100% warm-prefix hit,
+      # different key -> 0%. So the field survives the Foundry hop, reaches
+      # Fireworks, and partitions the prompt cache.
+      #
+      # ONE key for the whole fleet is deliberate. Every Claude Code user sends
+      # the SAME ~15k-token system prompt and tool definitions; a per-user key
+      # would split that shared prefix into one cache entry per user and destroy
+      # cross-user sharing — strictly worse. Use per-user keys only where users
+      # have genuinely different long prefixes.
+      - path: "prompt_cache_key"
+        value: "${CACHE_KEY}"
+  backendRef:
+    name: foundry
+    kind: Backend
+    group: gateway.envoyproxy.io
+    namespace: default
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: Backend
+metadata:
+  name: foundry
+  namespace: default
+spec:
+  endpoints:
+    - fqdn:
+        hostname: ${FOUNDRY_HOST}
+        port: 443
+---
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: foundry-tls
+  namespace: default
+spec:
+  targetRefs:
+    - group: gateway.envoyproxy.io
+      kind: Backend
+      name: foundry
+  validation:
+    # NOT `wellKnownCACertificates: "System"`. That resolves to a Linux CA path
+    # that doesn't exist under `aigw run` on macOS, and every upstream request
+    # dies with `TLS_error:_Secret_is_not_supplied_by_SDS` -> HTTP 503.
+    # start-gateway.sh appends a `system-ca` ConfigMap built from the host's
+    # real CA bundle and runs the combined file.
+    caCertificateRefs:
+      - name: system-ca
+        kind: ConfigMap
+        group: ""
+    hostname: ${FOUNDRY_HOST}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: foundry-apikey
+  namespace: default
+type: Opaque
+stringData:
+  apiKey: ${AZURE_API_KEY}
+---
+apiVersion: aigateway.envoyproxy.io/v1beta1
+kind: BackendSecurityPolicy
+metadata:
+  name: foundry-apikey
+  namespace: default
+spec:
+  targetRefs:
+    - group: aigateway.envoyproxy.io
+      kind: AIServiceBackend
+      name: foundry-glm
+  # AzureAPIKey injects the key as the "api-key" header, which is what Foundry
+  # expects. Plain "APIKey" would send "Authorization: Bearer" instead.
+  type: AzureAPIKey
+  azureAPIKey:
+    secretRef:
+      name: foundry-apikey
