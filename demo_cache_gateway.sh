@@ -179,7 +179,13 @@ except Exception:
 t0 = time.time()
 try:
     d = post(f"{gw}/v1/messages", {
-        "model": "claude-opus-5",          # rewritten by the gateway
+        # NOT a model choice — nothing here calls an Anthropic model. The
+        # gateway's bodyMutation overwrites this field with FOUNDRY_MODEL
+        # before the request leaves, so any value lands on GLM 5.2. It is set
+        # to the string Claude Code actually sends so this request is shaped
+        # like the real thing, and so the access log shows the rewrite:
+        # gen_ai.request.model=claude-opus-5, gen_ai.response.model=glm-5p2.
+        "model": "claude-opus-5",
         "max_tokens": 1024,
         "system": system,
         "messages": history + [{"role": "user", "content": prompt}],
