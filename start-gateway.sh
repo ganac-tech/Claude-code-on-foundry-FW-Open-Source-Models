@@ -39,7 +39,7 @@ if [[ "$RAW_HOST" != "$FOUNDRY_HOST" ]]; then
 fi
 
 : "${FOUNDRY_MODEL:=FW-GLM-5.2}"
-: "${CACHE_KEY:=paypal-claude-code}"
+: "${CACHE_KEY:=claude-code-fleet}"
 export FOUNDRY_MODEL CACHE_KEY
 
 # Envoy needs a real CA bundle to validate the TLS connection to Foundry.

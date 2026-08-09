@@ -1,7 +1,7 @@
 # secrets — never commit
 .env
 
-# Internal working notes — kept locally, not for this public repo.
+# Local working notes — not published.
 eval/FOUNDRY-NOTES.md
 
 # 288MB binary — install per README instead

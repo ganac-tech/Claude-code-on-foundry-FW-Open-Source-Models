@@ -70,103 +70,12 @@ would dominate cost and could itself change the answers.
 the whole budget goes to reasoning and you get empty replies that look like
 failures.
 
-## Cost, cache, and latency — what Azure Monitor won't give you
-
-Foundry's cost panel says *"Cost monitoring is available for Foundry Models sold
-directly by Azure only. Foundry Models from partners and community are not
-supported."* Fireworks GLM is a partner model, so there is no cost, no TTFT, and
-no percentile breakdown in the portal. The gateway is in the request path and
-measures all of it.
-
-```bash
-python3 eval/gateway_stats.py                      # everything so far
-python3 eval/gateway_stats.py --since 30m --json   # scriptable
-python3 eval/cache_probe.py --prefix-tokens 15000  # true cache hit rate
-```
-
-```
-  ── latency ─ exact, from Envoy access log ──────────────────
-    total p50            2,339 ms
-    total p90            9,835 ms
-    total p95           12,685 ms
-    total p99           79,633 ms
-
-  ── time to first token ─ approx, histogram-interpolated ───
-    TTFT p50             947.9 ms
-    TTFT p90           2,365.0 ms
-    TTFT p95           3,875.0 ms
-
-    per-output-token p50    7.4 ms  (~135 tok/s)
-```
-
-Two sources with different precision, and the tool labels which is which:
-
-| Source | Gives | Precision |
-|---|---|---|
-| Envoy access log | duration, token counts per request | **exact** — nearest-rank percentiles |
-| aigw `/metrics` | TTFT, time-per-output-token | **approximate** — interpolated within histogram buckets. The only source; the access log has no TTFT. |
-
-**TTFT is only recorded for streaming requests** (`"stream": true`) — a
-non-streaming call has no first-token event to measure. Claude Code always
-streams, so this populates from real traffic. Metrics are in-process counters
-and reset when the gateway restarts; the access log persists per run.
-
-### The gateway under-reports cache — cost is an upper bound
-
-**Envoy AI Gateway v1.0.0 does not map the upstream OpenAI field
-`usage.prompt_tokens_details.cached_tokens` into the Anthropic
-`cache_read_input_tokens` it returns.** Every request looks 100% uncached in
-gateway metrics even when Foundry served it from cache.
-
-Verified on this deployment — same 5,616-token prefix, two paths:
-
-| | `cached_tokens` |
-|---|---|
-| Through the gateway (`/anthropic/v1/messages`) | **0** |
-| Direct to Foundry (`/openai/v1/chat/completions`) | **5,613** |
-
-The caching is real; only the reporting is lost. `cache_probe.py` measures the
-true rate by talking to Foundry directly. At Claude Code's actual prompt size:
-
-```
-  call     prompt   cached    hit%
-  1        19,103    5,610   29.4%      <- cold, populates the cache
-  2        19,103   19,099  100.0%
-  3        19,103   19,099  100.0%
-
-  steady-state hit rate (calls 2+): 100.0%
-       billed as all-uncached : $0.080233
-       with cache             : $0.008038   (90% lower)
-```
-
-So for a Claude Code workload the gateway's input-cost figure overstates by
-roughly **10×**. Feed the measured rate back in:
-
-```bash
-python3 eval/gateway_stats.py --assume-cached-pct 100
-```
-
-`gateway_stats.py` prints this warning automatically whenever it sees zero
-cached tokens, so the number is never quoted as fact by accident.
-
-### Pricing
-
-Defaults are Fireworks **direct-serverless list** rates for GLM 5.2 —
-`$1.40` uncached input / `$0.14` cached input / `$4.40` output per 1M tokens.
-**Foundry bills through Azure at your negotiated rate**, which will differ.
-Override with `--price-in` / `--price-cached` / `--price-out`, or
-`GLM_PRICE_IN` / `GLM_PRICE_CACHED` / `GLM_PRICE_OUT`. The Azure invoice is the
-authoritative number; this is an estimate for comparing options.
-
 ## Files
 
 | | |
 |---|---|
 | `csv_to_jsonl.py` | CSV → JSONL, with `--clean` / `--dedup` / `--keep-marker` |
 | `run_eval.py` | Runs a JSONL against the gateway, grades, writes per-case results |
-| `gateway_stats.py` | Cost, cache rate, TTFT + latency percentiles from the gateway |
-| `cache_probe.py` | True cache hit rate, measured directly against Foundry |
-| `cache_key_probe.py` | Does `prompt_cache_key`/`user` reach Fireworks? Two-arm test |
 | `bug_fix.jsonl` | all 1000 rows |
 | `bug_fix_clean.jsonl` | 793 rows — degenerate cases removed |
 | `bug_fix_dedup.jsonl` | 10 rows — one per template |
@@ -197,5 +106,5 @@ eval harnesses. `flags` is empty for clean cases.
 This dataset can show the pipeline works end to end; it cannot differentiate
 models. Ten templates of introductory Python syntax errors will be at or near
 100% for any current model. For a result worth showing, use HumanEval / MBPP for
-code generation, SWE-bench (or a PayPal-internal commit corpus) for real bug
+code generation, SWE-bench for real bug
 fixing, and keep this one as a smoke test.

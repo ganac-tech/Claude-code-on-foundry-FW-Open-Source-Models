@@ -115,10 +115,8 @@ spec:
       timeouts:
         # Agentic turns at high reasoning effort run long. Keep this generous.
         request: 600s
-  # Captured into Envoy dynamic metadata per request, then written to the access
-  # log below. This is what eval/gateway_stats.py reads for exact per-request
-  # cost and cache-hit numbers — Azure Monitor does not report either for
-  # partner models like Fireworks GLM.
+  # Token counts captured into Envoy dynamic metadata, then written to the
+  # access log below so each request's usage is visible.
   llmRequestCosts:
     - metadataKey: llm_input_token
       type: InputToken
@@ -160,18 +158,9 @@ spec:
     set:
       - path: "model"
         value: "${FOUNDRY_MODEL}"
-      # Cache-routing key. Claude Code never sets one, so the gateway supplies it.
-      #
-      # Measured on this deployment (eval/cache_key_probe.py, 10 trials/arm,
-      # paced under the 66 req/min cap): same key -> 100% warm-prefix hit,
-      # different key -> 0%. So the field survives the Foundry hop, reaches
-      # Fireworks, and partitions the prompt cache.
-      #
-      # ONE key for the whole fleet is deliberate. Every Claude Code user sends
-      # the SAME ~15k-token system prompt and tool definitions; a per-user key
-      # would split that shared prefix into one cache entry per user and destroy
-      # cross-user sharing — strictly worse. Use per-user keys only where users
-      # have genuinely different long prefixes.
+      # Claude Code never sets a cache key, so the gateway supplies one. Keep it
+      # the same across the fleet: every user sends the same large system
+      # prompt, and one shared key lets them all reuse the same cached prefix.
       - path: "prompt_cache_key"
         value: "${CACHE_KEY}"
   backendRef:
