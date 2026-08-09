@@ -82,7 +82,7 @@ def main() -> int:
         key = (strip_marker(r["buggy_code"]), strip_marker(r["fixed_code"]))
         template_ids.setdefault(key, len(template_ids) + 1)
 
-    out_path = Path(args.out) if args.out else ROOT / "eval" / (
+    out_path = Path(args.out) if args.out else ROOT / "evaluation" / "local" / (
         "bug_fix"
         + ("_clean" if args.clean else "")
         + ("_dedup" if args.dedup else "")
