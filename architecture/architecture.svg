@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 500" width="1160" height="500"
+     role="img"
+     aria-label="Claude Code sends POST /v1/messages in Anthropic format to a local Envoy AI Gateway on port 1975. The gateway translates it to OpenAI chat-completions, injects the Azure api-key header, and crosses into Microsoft Azure over TLS. The FW-GLM-5.2-standard Foundry deployment is served by Fireworks GLM 5.2. The response travels back and the gateway translates it into Anthropic content blocks.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#566B84"/>
+    </marker>
+    <marker id="ahr" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5B3FD6"/>
+    </marker>
+    <linearGradient id="gAzure" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#21B4E8"/>
+      <stop offset="1" stop-color="#0F6CBD"/>
+    </linearGradient>
+    <linearGradient id="gBridge" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#BF5B37"/>
+      <stop offset="1" stop-color="#0F6CBD"/>
+    </linearGradient>
+    <linearGradient id="gViolet" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5B3FD6"/>
+      <stop offset="1" stop-color="#0F6CBD"/>
+    </linearGradient>
+  </defs>
+
+  <!-- card ground: keeps the figure legible on both light and dark GitHub themes -->
+  <rect x="0" y="0" width="1160" height="500" rx="14" fill="#FFFFFF"/>
+
+  <!-- ══ zones ══ -->
+  <rect x="26" y="102" width="546" height="250" rx="14"
+        fill="none" stroke="#D3DEEA" stroke-width="1.5" stroke-dasharray="5 5"/>
+  <text x="46" y="90" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" font-weight="600" letter-spacing="1.4" fill="#566B84">YOUR MACHINE</text>
+
+  <rect x="632" y="76" width="502" height="302" rx="14"
+        fill="#DDEEFA" stroke="#0F6CBD" stroke-width="1.5"/>
+  <g transform="translate(654,60)">
+    <path d="M6 12 L12 0 L16 0 L10 12 Z M0 12 L8 0 L4 12 Z" fill="#0F6CBD"/>
+    <text x="24" y="10" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+          font-size="11.5" font-weight="600" letter-spacing="1.4" fill="#0F6CBD">MICROSOFT AZURE</text>
+  </g>
+
+  <!-- ══ Claude Code ══ -->
+  <g transform="translate(130,206)">
+    <rect x="-30" y="-30" width="60" height="60" rx="16" fill="#F6E4DC" stroke="#BF5B37" stroke-width="1.6"/>
+    <polyline points="-13,-9 -3,0 -13,9" fill="none" stroke="#BF5B37"
+              stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="2" y1="10" x2="14" y2="10" stroke="#BF5B37" stroke-width="2.6" stroke-linecap="round"/>
+  </g>
+  <text x="130" y="266" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="600" fill="#14202E">Claude Code</text>
+  <text x="130" y="285" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">unmodified CLI</text>
+
+  <!-- ══ Envoy AI Gateway — the translator ══ -->
+  <g transform="translate(380,206)">
+    <path d="M0,-32 L27,-16 L27,16 L0,32 L-27,16 L-27,-16 Z" fill="none" stroke="url(#gBridge)" stroke-width="2.4"/>
+    <path d="M-13,-8 L-1,-8 L-1,8 L13,8" fill="none" stroke="#BF5B37"
+          stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="13" cy="8" r="3.4" fill="#0F6CBD"/>
+    <circle cx="-13" cy="-8" r="3.4" fill="#BF5B37"/>
+  </g>
+  <text x="380" y="266" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="600" fill="#14202E">Envoy AI Gateway</text>
+  <text x="380" y="285" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">localhost:1975</text>
+  <text x="380" y="306" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11" font-weight="600" letter-spacing="0.6" fill="#BF5B37">TRANSLATES</text>
+
+  <!-- ══ Foundry deployment ══ -->
+  <g transform="translate(780,206)">
+    <path d="M0,-32 L28,-16 L28,16 L0,32 L-28,16 L-28,-16 Z" fill="url(#gAzure)" opacity="0.18"/>
+    <path d="M0,-32 L28,-16 L28,16 L0,32 L-28,16 L-28,-16 Z" fill="none" stroke="#0F6CBD" stroke-width="1.9"/>
+    <path d="M0,-32 L0,0 L28,-16 M0,0 L-28,-16 M0,0 L0,32" fill="none" stroke="#0F6CBD" stroke-width="1.5" opacity="0.55"/>
+    <circle cx="0" cy="0" r="4.6" fill="#21B4E8"/>
+  </g>
+  <text x="780" y="266" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="600" fill="#14202E">Foundry deployment</text>
+  <text x="780" y="285" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">FW-GLM-5.2-standard</text>
+
+  <!-- ══ Fireworks GLM 5.2 ══ -->
+  <g transform="translate(1010,206)">
+    <circle cx="0" cy="0" r="31" fill="url(#gViolet)" opacity="0.15"/>
+    <circle cx="0" cy="0" r="31" fill="none" stroke="#5B3FD6" stroke-width="1.9"/>
+    <g stroke="#5B3FD6" stroke-width="2.4" stroke-linecap="round">
+      <line x1="0" y1="-17" x2="0" y2="-7"/>
+      <line x1="0" y1="7" x2="0" y2="17"/>
+      <line x1="-17" y1="0" x2="-7" y2="0"/>
+      <line x1="7" y1="0" x2="17" y2="0"/>
+      <line x1="-12" y1="-12" x2="-5" y2="-5"/>
+      <line x1="5" y1="5" x2="12" y2="12"/>
+      <line x1="12" y1="-12" x2="5" y2="-5"/>
+      <line x1="-5" y1="5" x2="-12" y2="12"/>
+    </g>
+    <circle cx="0" cy="0" r="4" fill="#5B3FD6"/>
+  </g>
+  <text x="1010" y="266" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="14" font-weight="600" fill="#14202E">Fireworks GLM 5.2</text>
+  <text x="1010" y="285" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">glm-5p2</text>
+
+  <!-- ══ request path ══ -->
+  <line x1="170" y1="206" x2="337" y2="206" stroke="#566B84" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="253" y="188" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" font-weight="600" fill="#BF5B37">POST /v1/messages</text>
+  <text x="253" y="173" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="0.5" fill="#566B84">ANTHROPIC</text>
+
+  <line x1="420" y1="206" x2="745" y2="206" stroke="#566B84" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="583" y="188" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" font-weight="600" fill="#0F6CBD">POST /openai/v1/chat/completions</text>
+  <text x="583" y="173" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="0.5" fill="#566B84">OPENAI · api-key header</text>
+
+  <line x1="815" y1="206" x2="974" y2="206" stroke="#566B84" stroke-width="1.6" marker-end="url(#ah)"/>
+  <text x="894" y="188" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11" fill="#566B84">serves</text>
+
+  <!-- ══ response path ══ -->
+  <path d="M1010 250 L1010 340 L380 340 L380 250" fill="none" stroke="#5B3FD6"
+        stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ahr)"/>
+  <rect x="600" y="326" width="312" height="28" rx="6" fill="#FFFFFF"/>
+  <text x="756" y="345" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" font-weight="600" fill="#5B3FD6">reasoning_content · tool_calls · finish_reason</text>
+  <text x="380" y="373" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="12" font-weight="600" fill="#BF5B37">thinking · tool_use · stop_reason</text>
+  <text x="380" y="390" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="10.5" letter-spacing="0.5" fill="#566B84">back to ANTHROPIC blocks</text>
+
+  <!-- ══ boundary ══ -->
+  <line x1="601" y1="110" x2="601" y2="410" stroke="#D3DEEA" stroke-width="1.5"/>
+  <text x="601" y="428" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11" fill="#566B84">TLS · public internet</text>
+
+  <text x="26" y="464" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">Claude Code is never modified — only ANTHROPIC_BASE_URL points at the gateway.</text>
+  <text x="26" y="482" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
+        font-size="11.5" fill="#566B84">The Azure key never leaves the gateway; Claude Code holds a placeholder token.</text>
+</svg>

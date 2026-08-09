@@ -3,10 +3,7 @@
 Run unmodified **Claude Code** against a Fireworks **GLM 5.2** deployment in
 **Microsoft Foundry**.
 
-```
-Claude Code ──POST /anthropic/v1/messages──▶  aigw :1975  ──POST /openai/v1/chat/completions──▶  Foundry
-   (Anthropic Messages API)                    [translate]              (OpenAI schema)              GLM 5.2
-```
+![Architecture: Claude Code to Fireworks GLM 5.2 in Microsoft Foundry via a local Envoy AI Gateway](architecture/architecture.svg)
 
 Claude Code speaks the Anthropic Messages API. Foundry serves Fireworks models
 over OpenAI chat-completions only. A local Envoy AI Gateway translates between
@@ -217,6 +214,7 @@ Token usage arrives once, in the final `message_delta` — the `usage` on
 | `demo.sh` | Interactive prompt |
 | `claude-foundry.sh` | Full Claude Code session |
 | `smoke-test.sh` | 11 checks against a running gateway |
+| `architecture/` | Diagram and how the pieces fit — see `architecture/README.md` |
 | `evaluation/` | Azure Foundry + local evaluation — see `evaluation/README.md` |
 
 ## Running it in Kubernetes
