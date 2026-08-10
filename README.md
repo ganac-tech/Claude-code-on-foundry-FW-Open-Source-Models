@@ -250,9 +250,60 @@ definitions, identical on every request and identical across every developer.
 Once warm, all but one token of it is served from cache at a tenth of the input
 price. That is the whole argument for a single fleet-wide `CACHE_KEY`.
 
-Every sample lands in a CSV (`ts,prompt_tokens,cached_tokens,pct,latency_ms,status`).
-`429`s are recorded but excluded from the hit rate — a rate limit is not a cache
-miss, and counting it as one invents hit-rate collapses that never happened.
+Every sample lands in a CSV. `429`s are recorded but excluded from the hit rate
+— a rate limit is not a cache miss, and counting it as one invents hit-rate
+collapses that never happened.
+
+**To prove the measurement is real**, not just a script printing 100%:
+
+```bash
+python3 cache_architecture/cache_monitor.py verify --tag run1
+```
+
+It sends a never-before-seen prefix (expect a miss), repeats it (expect a hit),
+then changes **one word** (expect a miss again), and cross-checks the count
+against a second independent field. Exits non-zero if any check fails.
+
+### Latency the Azure portal won't give you
+
+Setting `perf_metrics_in_response: true` returns Fireworks' server-side timings
+in the response **body** — necessary because Azure APIM strips `fireworks-*`
+headers. That yields the TTFT and percentiles Azure Monitor does not expose for
+partner models:
+
+```
+server time-to-first-token   p50 96ms   p90 102ms   p95 109ms   max 109ms
+```
+
+Two things fall out of it:
+
+- **A cache hit is faster, not just cheaper** — 565ms TTFT cold vs 47ms warm on
+  the same prefix, measured seconds apart.
+- **The model is not your latency problem.** ~96ms server TTFT against a ~790ms
+  round trip means roughly 690ms is network and the Azure front door.
+
+It works only on a direct call. The gateway's Anthropic translator drops
+`perf_metrics`, and `/openai/v1/responses` rejects the parameter outright with
+`400 Unknown parameter` — which is also why a caching test run against the
+Responses API reports zero cached tokens on a deployment that caches fine.
+
+### Quota is what breaks first
+
+Cached tokens still count against your rate limit. Caching cuts the bill 10×;
+it does nothing for throughput. Check what you actually have:
+
+```bash
+curl -sD- -o /dev/null "https://$FOUNDRY_HOST/openai/v1/chat/completions" \
+  -H "api-key: $AZURE_API_KEY" -H 'content-type: application/json' \
+  -d '{"model":"'"$FOUNDRY_MODEL"'","max_completion_tokens":1,"messages":[{"role":"user","content":"."}]}' \
+  | grep -i ratelimit-limit
+```
+
+One deployment measured here returns `x-ratelimit-limit-tokens: 66000` — which
+**cannot support a single Claude Code developer**, since each request carries
+~24k tokens and a turn makes several. Another returns 499,000. Check yours
+before planning a rollout, and raise it at
+[aka.ms/fireworks-quota](https://aka.ms/fireworks-quota).
 
 **What this does and does not tell you.** It tracks whether that prefix stays
 resident on the replicas your cache key routes to, which is the thing that

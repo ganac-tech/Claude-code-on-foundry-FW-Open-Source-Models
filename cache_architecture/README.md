@@ -203,6 +203,80 @@ Options: `--interval` (default 60s), `--samples N` (default 0, run until
 Ctrl-C), `--prefix FILE`, `--out FILE`. Without a captured prefix it falls back
 to a synthetic one of similar size and says so.
 
+### Proving the measurement is real — `verify`
+
+A monitor that always prints 100% demonstrates nothing. `verify` drives the
+cache through a known sequence and checks the reported figure follows:
+
+```bash
+python3 cache_architecture/cache_monitor.py verify --tag run1
+```
+
+```
+1. brand-new prefix, never sent          → expect a MISS
+   cached 18 / 3,228  (0.6%)
+2. same prefix again                     → expect a HIT
+   cached 3,227 / 3,228  (100.0%)
+3. one word changed in the prefix        → expect a MISS again
+   cached 19 / 3,230  (0.6%)
+
+  PASS  reports a miss on content nothing has seen    0.6% cached
+  PASS  reports a hit once the prefix is warm         100.0% cached
+  PASS  tracks content, not the cache key             0.6% cached
+  PASS  two independent fields report the same count  usage=3,227  perf_metrics=3,227
+```
+
+Step 3 is the one that matters: same key, same endpoint, same token count —
+only a single word of prefix differs, and the number collapses. That rules out
+the figure being an artefact of the request rather than of real caching.
+
+Pass a **fresh `--tag`** each run; the previous tag is warm and step 1 would
+hit. Exits non-zero if a check fails. Takes ~20s and 3,228 tokens a step.
+
+### Server-side timings
+
+`perf_metrics_in_response: true` returns Fireworks' own timings in the response
+**body** — which matters because Azure APIM strips `fireworks-*` headers:
+
+```json
+"perf_metrics": {
+  "prompt-tokens": "24074",
+  "cached-prompt-tokens": "24073",
+  "server-time-to-first-token": "0.096",
+  "server-processing-time": "0.098"
+}
+```
+
+This is the TTFT and percentile data Azure Monitor does not expose for partner
+models. `watch` prints p50/p90/p95 on exit:
+
+```
+server time-to-first-token   p50 96ms   p90 102ms   p95 109ms   max 109ms
+```
+
+Two findings worth knowing:
+
+- **Cold vs warm is a latency story too, not only cost.** Measured on the same
+  prefix seconds apart: **565ms TTFT cold, 47ms warm** — 12×. The cache skips
+  re-processing the prefix.
+- **Most of the wall clock is not the model.** Server TTFT ~96ms against a
+  ~790ms round trip: roughly 690ms is network and the Azure front door.
+
+`server-processing-time` covers the whole server turn including generation, so
+network overhead is *(wall clock − server-processing-time)*. Subtracting TTFT
+instead counts generation as network, which it is not.
+
+Two places this does **not** work, both measured:
+
+| path | result |
+|---|---|
+| through the Envoy gateway | `perf_metrics` dropped — the Anthropic translator keeps only known fields |
+| `/openai/v1/responses` | `HTTP 400 Unknown parameter: 'perf_metrics_in_response'` |
+
+The second is why a Responses-API caching test reports zero cached tokens on a
+deployment that caches perfectly well: that surface is a separate implementation
+that does not carry Fireworks-native accounting.
+
 Every sample appends to a CSV — `ts,prompt_tokens,cached_tokens,pct,latency_ms,status`.
 `429`s are logged but kept out of the hit rate: a rate limit is not a cache
 miss, and counting it as one manufactures hit-rate collapses that never
@@ -224,9 +298,15 @@ and tool definitions — measurement input, and not ours to republish.
 |---|---|
 | `/again` | re-send the last prompt — the clearest way to see a hit |
 | `/cold` | new system prompt; forces a genuinely cold start on any key |
+| `/newkey` | *(direct only)* rotate the cache key |
 | `/new` | clear the conversation, keep the cached system prompt |
 | `/key` | switch cache key (gateway version restarts the gateway) |
 | `/stats` | session totals and what the cache saved |
+
+Both scripts keep their prefix and key **stable across runs**, so relaunching
+lands on the same replica and the cache survives — which is how a real fleet
+behaves. `/cold` and `/newkey` force a miss when you want one. (Earlier versions
+randomised on every launch, which made a warm restart impossible to show.)
 
 Switching keys restarts the gateway because a client cannot choose its own key.
 `prompt_cache_key` is not a field in the Anthropic Messages API, so a client

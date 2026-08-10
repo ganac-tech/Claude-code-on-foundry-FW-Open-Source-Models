@@ -58,7 +58,10 @@ echo '[]' > "$HISTORY"
 echo '{"turns":0,"in":0,"cached":0,"out":0,"ms":0}' > "$TOTALS"
 
 new_key() { echo "sess-$(python3 -c 'import uuid;print(uuid.uuid4().hex[:12])')"; }
-CACHE_KEY_SESSION="$(new_key)"
+# Stable across runs on purpose, so relaunching lands on the same replica and
+# the cache survives — which is how a real fleet behaves. /newkey rotates it
+# when you want to show routing send you somewhere cold.
+CACHE_KEY_SESSION="${CACHE_KEY:-demo-shared}"
 
 # A realistic system prompt. Prompt caching only pays off on a substantial
 # shared prefix — this stands in for the ~24k tokens of instructions and tool
@@ -130,6 +133,11 @@ messages = [{"role": "system", "content": system}] + history + \
 body = json.dumps({
     "model": model, "max_tokens": 1024,
     "prompt_cache_key": cache_key,      # session affinity
+    # Fireworks extension: server-side timings in the response body. Body, not
+    # headers, because APIM strips fireworks-* headers. Usable here only because
+    # this script talks to Foundry directly — the Anthropic translator in the
+    # gateway discards the block, so demo_cache_gateway.sh cannot show it.
+    "perf_metrics_in_response": True,
     "messages": messages,
 }).encode()
 
@@ -168,6 +176,19 @@ badge = "\x1b[32mCACHE HIT\x1b[0m" if pct >= 50 else (
         "\x1b[33mpartial\x1b[0m" if pct > 0 else "\x1b[2mcold\x1b[0m")
 print(f"\x1b[2m   ─ in {tin:,}  ·  cached {cached:,} ({pct:.0f}%)  ·  "
       f"out {tout:,}  ·  {ms:,}ms  ─ \x1b[0m{badge}")
+
+# Server-side timings, when the deployment honours the extension.
+# server-processing-time covers the whole server turn including generation, so
+# the network + Azure overhead is (wall clock - processing). Subtracting ttft
+# instead would count generation time as network, which it is not.
+pm = d.get("perf_metrics") or {}
+try:
+    ttft = int(float(pm["server-time-to-first-token"]) * 1000)
+    srv = int(float(pm["server-processing-time"]) * 1000)
+    print(f"\x1b[2m     server ttft {ttft:,}ms  ·  server total {srv:,}ms  ·  "
+          f"{max(0, ms - srv):,}ms network + Azure\x1b[0m")
+except (KeyError, TypeError, ValueError):
+    pass
 
 history += [{"role": "user", "content": prompt},
             {"role": "assistant", "content": text}]

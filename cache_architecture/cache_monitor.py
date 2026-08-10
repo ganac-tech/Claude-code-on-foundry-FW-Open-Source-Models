@@ -186,6 +186,11 @@ def sample(env: dict[str, str], messages: list[dict]) -> dict:
         "model": env["FOUNDRY_MODEL"],
         "max_completion_tokens": 1,
         "prompt_cache_key": env["CACHE_KEY"],
+        # Fireworks extension: returns a perf_metrics block in the response body
+        # carrying server-side timings Azure Monitor does not expose for partner
+        # models. Body, not headers — APIM strips fireworks-* headers. Rejected
+        # by /openai/v1/responses, which is why this only runs on chat completions.
+        "perf_metrics_in_response": True,
         "messages": messages,
     }
     req = urllib.request.Request(
@@ -193,8 +198,8 @@ def sample(env: dict[str, str], messages: list[dict]) -> dict:
         headers={"api-key": env["AZURE_API_KEY"], "content-type": "application/json"},
     )
     row = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-           "prompt_tokens": 0, "cached_tokens": 0, "pct": None,
-           "latency_ms": 0, "status": "ok"}
+           "prompt_tokens": 0, "cached_tokens": 0, "pct": None, "latency_ms": 0,
+           "ttft_ms": None, "server_ms": None, "pm_cached": None, "status": "ok"}
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
@@ -210,11 +215,52 @@ def sample(env: dict[str, str], messages: list[dict]) -> dict:
         row["latency_ms"] = int((time.time() - t0) * 1000)
         return row
 
+    # ── where every number below comes from ─────────────────────────────────
+    #
+    # All of it is read off the body of THIS request's response, returned by
+    # POST https://<host>/openai/v1/chat/completions. Not Azure Monitor, not
+    # the gateway, not a metrics endpoint — those three have no cached-token
+    # figure for partner models at all.
+    #
+    # The body is written by the Fireworks replica that served the request and
+    # forwarded by Foundry unchanged. `"model": "accounts/fireworks/models/..."`
+    # in the same payload is the tell. Two independent fields carry the count:
+    #
+    #   usage.prompt_tokens_details.cached_tokens   OpenAI-standard    → cached_tokens
+    #   perf_metrics.cached-prompt-tokens           Fireworks-native   → pm_cached
+    #
+    # They have matched exactly on every request measured; `verify` asserts it.
+    # Only the first survives on a plain request — perf_metrics requires the
+    # perf_metrics_in_response flag set in the payload above.
+    #
+    # Neither is available through the Envoy gateway (the Anthropic translator
+    # drops both) or on /openai/v1/responses (reports 0, and rejects the flag).
+    # That is the entire reason this monitor calls Foundry directly.
+    # ─────────────────────────────────────────────────────────────────────────
     u = d.get("usage", {})
     row["latency_ms"] = int((time.time() - t0) * 1000)
     row["prompt_tokens"] = u.get("prompt_tokens", 0)
     row["cached_tokens"] = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
     row["pct"] = (100.0 * row["cached_tokens"] / row["prompt_tokens"]) if row["prompt_tokens"] else 0.0
+
+    # perf_metrics values arrive as strings, and the block is absent if the
+    # deployment does not honour the extension — hence the guarded parse.
+    pm = d.get("perf_metrics") or {}
+
+    def _ms(key):
+        try:
+            return int(float(pm[key]) * 1000)
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    row["ttft_ms"] = _ms("server-time-to-first-token")
+    row["server_ms"] = _ms("server-processing-time")
+    # Fireworks' own count of the same thing. Kept separate so `verify` can
+    # check the two independent fields against each other.
+    try:
+        row["pm_cached"] = int(pm["cached-prompt-tokens"])
+    except (KeyError, TypeError, ValueError):
+        row["pm_cached"] = None
     return row
 
 
@@ -244,11 +290,16 @@ def cmd_watch(args) -> int:
               f" Run `capture` for the real thing.{RST}")
     print()
 
+    header = "ts,prompt_tokens,cached_tokens,pct,latency_ms,ttft_ms,server_ms,status\n"
     out = Path(args.out)
     if not out.exists():
-        out.write_text("ts,prompt_tokens,cached_tokens,pct,latency_ms,status\n")
+        out.write_text(header)
+    elif out.read_text(errors="replace").split("\n", 1)[0] + "\n" != header:
+        sys.exit(f"{out} has an older column layout. Move it aside or pass --out "
+                 f"a new path; appending would misalign the columns.")
 
     pcts: list[float] = []
+    ttfts: list[int] = []
     hits = misses = errors = 0
     n = 0
     try:
@@ -256,8 +307,12 @@ def cmd_watch(args) -> int:
             n += 1
             r = sample(env, messages)
             with out.open("a") as fh:
-                fh.write("{ts},{prompt_tokens},{cached_tokens},{pct},{latency_ms},{status}\n".format(
-                    **{**r, "pct": "" if r["pct"] is None else f"{r['pct']:.1f}"}))
+                fh.write(("{ts},{prompt_tokens},{cached_tokens},{pct},{latency_ms},"
+                          "{ttft_ms},{server_ms},{status}\n").format(
+                    **{**r,
+                       "pct": "" if r["pct"] is None else f"{r['pct']:.1f}",
+                       "ttft_ms": "" if r["ttft_ms"] is None else r["ttft_ms"],
+                       "server_ms": "" if r["server_ms"] is None else r["server_ms"]}))
 
             clock = r["ts"][11:19]
             if r["status"] != "ok":
@@ -268,8 +323,13 @@ def cmd_watch(args) -> int:
                 hit = r["pct"] >= 50
                 hits, misses = hits + hit, misses + (not hit)
                 badge = f"{GRN}HIT{RST}" if hit else f"{DIM}cold{RST}"
+                if r["ttft_ms"] is not None:
+                    ttfts.append(r["ttft_ms"])
+                    timing = f"{r['ttft_ms']:>4,}ms ttft"
+                else:
+                    timing = f"{r['latency_ms']:>5,}ms"
                 print(f"{clock}  cached {r['cached_tokens']:>7,} / {r['prompt_tokens']:>7,}"
-                      f"  ({r['pct']:5.1f}%)  {r['latency_ms']:>5,}ms  {badge}")
+                      f"  ({r['pct']:5.1f}%)  {timing}  {badge}")
 
             if pcts and len(pcts) % 10 == 0:
                 print(f"{DIM}          ── {hits}/{hits + misses} hits"
@@ -287,13 +347,102 @@ def cmd_watch(args) -> int:
           + (f" ({100.0 * hits / total:.0f}%)" if total else "")
           + (f" · median {statistics.median(pcts):.0f}% of prefix cached" if pcts else "")
           + f" · {errors} errors")
+    if ttfts:
+        s = sorted(ttfts)
+        def pct(q):     # nearest-rank; exact and well-defined for small n
+            return s[min(len(s) - 1, max(0, round(q / 100 * len(s)) - 1))]
+        print(f"server time-to-first-token   p50 {pct(50):,}ms   "
+              f"p90 {pct(90):,}ms   p95 {pct(95):,}ms   max {s[-1]:,}ms")
+        print(f"{DIM}measured inside Fireworks, excludes network and Azure front door{RST}")
     print(f"{DIM}rows in {out}{RST}")
     return 0
+
+
+# ── verify ──────────────────────────────────────────────────────────────────
+
+def cmd_verify(args) -> int:
+    """Prove the measurement is real by making the number move on demand.
+
+    A monitor that always prints 100% demonstrates nothing. This drives the
+    cache through a known sequence — cold, warm, cold again after a one-word
+    edit — and checks the reported figure follows. Then it cross-checks that
+    figure against a second, independent field.
+    """
+    env = load_env()
+    filler = ("Reference material for cache verification. "
+              "The quick brown fox jumps over the lazy dog. " * 200)
+
+    def prefix(tag: str) -> list[dict]:
+        return [{"role": "system", "content": f"Verification prefix {tag}.\n{filler}"},
+                {"role": "user", "content": "Reply with: ."}]
+
+    def take(msgs, retries=1):
+        """One sample; retry past a 429 so a rate limit is not read as a result."""
+        for _ in range(retries + 1):
+            r = sample(env, msgs)
+            if r["status"] == "ok":
+                return r
+            print(f"   {DIM}{r['status']} — waiting 20s and retrying{RST}")
+            time.sleep(20)
+        return r
+
+    marker = f"{env['CACHE_KEY']}-{args.tag}"
+    print(f"host      {env['FOUNDRY_HOST']}")
+    print(f"model     {env['FOUNDRY_MODEL']}")
+    print(f"marker    {marker}   {DIM}(never sent before — change --tag to rerun){RST}\n")
+
+    checks: list[tuple[str, bool, str]] = []
+
+    print("1. brand-new prefix, never sent          → expect a MISS")
+    a = take(prefix(marker))
+    print(f"   cached {a['cached_tokens']:,} / {a['prompt_tokens']:,}  ({a['pct']:.1f}%)\n")
+    checks.append(("reports a miss on content nothing has seen", a["pct"] < 50,
+                   f"{a['pct']:.1f}% cached"))
+
+    time.sleep(args.gap)
+    print("2. same prefix again                     → expect a HIT")
+    b = take(prefix(marker))
+    print(f"   cached {b['cached_tokens']:,} / {b['prompt_tokens']:,}  ({b['pct']:.1f}%)\n")
+    checks.append(("reports a hit once the prefix is warm", b["pct"] >= 50,
+                   f"{b['pct']:.1f}% cached"))
+
+    time.sleep(args.gap)
+    print("3. one word changed in the prefix        → expect a MISS again")
+    c = take(prefix(marker + "-edited"))
+    print(f"   cached {c['cached_tokens']:,} / {c['prompt_tokens']:,}  ({c['pct']:.1f}%)\n")
+    checks.append(("tracks content, not the cache key", c["pct"] < 50,
+                   f"{c['pct']:.1f}% cached"))
+
+    agree = b["pm_cached"] is not None and b["pm_cached"] == b["cached_tokens"]
+    detail = (f"usage={b['cached_tokens']:,}  perf_metrics={b['pm_cached']:,}"
+              if b["pm_cached"] is not None
+              else "perf_metrics absent — cross-check unavailable")
+    checks.append(("two independent fields report the same count", agree, detail))
+
+    print("─" * 62)
+    ok = True
+    for name, passed, detail in checks:
+        ok &= passed
+        mark = f"{GRN}PASS{RST}" if passed else f"{RED}FAIL{RST}"
+        print(f"  {mark}  {name:<45} {DIM}{detail}{RST}")
+    print("─" * 62)
+    if ok:
+        print(f"{GRN}The reported figure follows the cache. The measurement is real.{RST}")
+    else:
+        print(f"{YEL}A check did not hold. Cache hits are non-deterministic — rerun with"
+              f" a new --tag before concluding anything.{RST}")
+    return 0 if ok else 1
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    v = sub.add_parser("verify", help="prove the measurement is real (demo-ready)")
+    v.add_argument("--tag", default="run1",
+                   help="changes the prefix; use a fresh one to rerun from cold")
+    v.add_argument("--gap", type=int, default=5, help="seconds between steps")
+    v.set_defaults(fn=cmd_verify)
 
     c = sub.add_parser("capture", help="record the prefix Claude Code sends")
     c.add_argument("--port", type=int, default=1976)

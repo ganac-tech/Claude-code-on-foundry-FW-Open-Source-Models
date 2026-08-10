@@ -141,7 +141,10 @@ Answer format:
 - Code blocks are complete and runnable, not fragments with ellipses.
 SYSTEM
 
-MARKER="$(python3 -c 'import uuid;print(uuid.uuid4().hex[:10])')"
+# Stable on purpose. A random marker here would make every launch a fresh
+# cache entry, so restarting could never show a hit — which is the opposite of
+# how real Claude Code behaves. /cold randomizes it when you want a cold start.
+MARKER="stable"
 write_system "$MARKER"
 
 PY="$STATE/turn.py"
@@ -324,6 +327,7 @@ hr
 dim  "cache key: ${ACTIVE_KEY}    ·    /again  /cold  /new  /key  /stats  exit"
 dim  "cached = the ~500-token system prompt, not your question"
 dim  "repeats usually hit, but routing can land you on a cold replica"
+dim  "the system prompt is stable across runs — /cold changes it to force a miss"
 hr
 
 LAST=""
